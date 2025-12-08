@@ -2,6 +2,15 @@ import React, { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { Users, Copy, Check, AlertCircle, Crown, Eye, EyeOff, LogOut, RefreshCw } from 'lucide-react';
 
+// Tailwind CSS CDN - Add this if Tailwind isn't configured in your project
+if (typeof document !== 'undefined' && !document.getElementById('tailwind-cdn')) {
+  const link = document.createElement('link');
+  link.id = 'tailwind-cdn';
+  link.rel = 'stylesheet';
+  link.href = 'https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css';
+  document.head.appendChild(link);
+}
+
 // Initialize Supabase client from environment variables
 const supabaseUrl = process.env.REACT_APP_SUPABASE_URL;
 const supabaseAnonKey = process.env.REACT_APP_SUPABASE_ANON_KEY;
@@ -207,58 +216,103 @@ const SecretHitlerGame = () => {
 
   // Subscribe to room updates
   const subscribeToRoom = (roomId) => {
+    // Unsubscribe from any existing subscriptions first
+    supabase.removeAllChannels();
+
     // Subscribe to players changes
-    const playersSubscription = supabase
-      .channel(`players:${roomId}`)
+    const playersChannel = supabase
+      .channel(`players-${roomId}`, {
+        config: {
+          broadcast: { self: true },
+          presence: { key: myPlayerId }
+        }
+      })
       .on('postgres_changes', 
-        { event: '*', schema: 'public', table: 'players', filter: `room_id=eq.${roomId}` },
+        { 
+          event: '*', 
+          schema: 'public', 
+          table: 'players', 
+          filter: `room_id=eq.${roomId}` 
+        },
         (payload) => {
+          console.log('Player change detected:', payload);
           loadPlayers(roomId);
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log('Players subscription status:', status);
+        if (status === 'SUBSCRIBED') {
+          console.log('✅ Successfully subscribed to players channel');
+        }
+      });
 
     // Subscribe to room changes
-    const roomSubscription = supabase
-      .channel(`room:${roomId}`)
+    const roomChannel = supabase
+      .channel(`room-${roomId}`)
       .on('postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'rooms', filter: `id=eq.${roomId}` },
+        { 
+          event: 'UPDATE', 
+          schema: 'public', 
+          table: 'rooms', 
+          filter: `id=eq.${roomId}` 
+        },
         (payload) => {
+          console.log('Room change detected:', payload);
           setCurrentRoom(payload.new);
           if (payload.new.game_state) {
             updateGameState(payload.new.game_state);
           }
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log('Room subscription status:', status);
+      });
 
+    // Initial load
     loadPlayers(roomId);
 
+    // Polling fallback - check for updates every 2 seconds
+    const pollingInterval = setInterval(() => {
+      loadPlayers(roomId);
+    }, 2000);
+
     return () => {
-      playersSubscription.unsubscribe();
-      roomSubscription.unsubscribe();
+      console.log('Unsubscribing from channels');
+      clearInterval(pollingInterval);
+      playersChannel.unsubscribe();
+      roomChannel.unsubscribe();
     };
   };
 
   // Load players
   const loadPlayers = async (roomId) => {
-    const { data, error } = await supabase
-      .from('players')
-      .select('*')
-      .eq('room_id', roomId)
-      .order('created_at', { ascending: true });
+    try {
+      const { data, error } = await supabase
+        .from('players')
+        .select('*')
+        .eq('room_id', roomId)
+        .order('created_at', { ascending: true });
 
-    if (!error && data) {
-      setPlayers(data);
-      
-      // Check for disconnected players
-      const disconnected = data.find(p => !p.is_connected && p.role);
-      if (disconnected && currentRoom?.status === 'playing') {
-        setDisconnectedPlayer(disconnected);
-        startReconnectTimer();
-      } else {
-        setDisconnectedPlayer(null);
+      if (error) {
+        console.error('Error loading players:', error);
+        return;
       }
+
+      if (data) {
+        console.log('Loaded players:', data);
+        setPlayers(data);
+        
+        // Check for disconnected players
+        const disconnected = data.find(p => !p.is_connected && p.role);
+        if (disconnected && currentRoom?.status === 'playing') {
+          setDisconnectedPlayer(disconnected);
+          startReconnectTimer();
+        } else {
+          setDisconnectedPlayer(null);
+        }
+      }
+    } catch (err) {
+      console.error('Error in loadPlayers:', err);
     }
   };
 
@@ -428,7 +482,15 @@ const SecretHitlerGame = () => {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const isLeader = players.find(p => p.id === myPlayerId)?.is_leader;
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (currentRoom) {
+        handleLeaveRoom();
+      }
+      supabase.removeAllChannels();
+    };
+  }, []);
   const connectedPlayers = players.filter(p => p.is_connected);
 
   return (
