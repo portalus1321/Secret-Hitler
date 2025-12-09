@@ -560,6 +560,23 @@ const GameBoard = ({ room, players, myPlayer, onUpdateGameState, onLeave }) => {
   const isPres = pres?.id === myPlayer.id;
   const isChanc = chanc?.id === myPlayer.id;
   const [investigating, setInvestigating] = useState(null);
+  const initialRoundStarted = useRef(false);
+
+  // Kick off the first round after role reveal so the game can proceed to nomination/voting
+  useEffect(() => {
+    if (phase === PHASES.ROLE_REVEAL && !initialRoundStarted.current) {
+      initialRoundStarted.current = true;
+      onUpdateGameState({
+        ...gs,
+        phase: PHASES.NOMINATION,
+        nominatedChancellor: null,
+        votes: {},
+        executiveAction: null,
+        electionTracker: gs.electionTracker ?? 0,
+        presidentIndex: gs.presidentIndex ?? 0
+      });
+    }
+  }, [phase, gs, onUpdateGameState]);
 
   // Game Over
   if (phase === PHASES.GAME_OVER) {
