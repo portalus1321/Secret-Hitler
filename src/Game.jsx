@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import { Users, Copy, Check, AlertCircle, Crown, Eye, EyeOff, LogOut, RefreshCw } from 'lucide-react';
+import { Users, Copy, Check, AlertCircle, Crown, Eye, EyeOff, LogOut, Shield, Skull } from 'lucide-react';
 
-// Tailwind CSS CDN - Add this if Tailwind isn't configured in your project
+// Tailwind CSS CDN
 if (typeof document !== 'undefined' && !document.getElementById('tailwind-cdn')) {
   const link = document.createElement('link');
   link.id = 'tailwind-cdn';
@@ -11,14 +11,12 @@ if (typeof document !== 'undefined' && !document.getElementById('tailwind-cdn'))
   document.head.appendChild(link);
 }
 
-// Initialize Supabase client from environment variables
+// Initialize Supabase
 const supabaseUrl = process.env.REACT_APP_SUPABASE_URL;
 const supabaseAnonKey = process.env.REACT_APP_SUPABASE_ANON_KEY;
 
 if (!supabaseUrl || !supabaseAnonKey) {
   console.error('Missing Supabase credentials!');
-  console.error('REACT_APP_SUPABASE_URL:', supabaseUrl);
-  console.error('REACT_APP_SUPABASE_ANON_KEY:', supabaseAnonKey ? 'Present' : 'Missing');
   throw new Error('Please add REACT_APP_SUPABASE_URL and REACT_APP_SUPABASE_ANON_KEY to your .env file');
 }
 
@@ -33,15 +31,15 @@ const ROLES = {
 const GAME_PHASES = {
   LOBBY: 'lobby',
   ROLE_REVEAL: 'role_reveal',
-  ELECTION: 'election',
   NOMINATION: 'nomination',
   VOTING: 'voting',
   LEGISLATIVE: 'legislative',
+  LEGISLATIVE_CHANCELLOR: 'legislative_chancellor',
   EXECUTIVE: 'executive',
   GAME_OVER: 'game_over'
 };
 
-// Role distribution based on player count
+// Role distribution
 const getRoleDistribution = (playerCount) => {
   const distributions = {
     5: { liberal: 3, fascist: 1, hitler: 1 },
@@ -54,49 +52,523 @@ const getRoleDistribution = (playerCount) => {
   return distributions[playerCount] || distributions[5];
 };
 
-const SecretHitlerGame = () => {
-  const [gameState, setGameState] = useState('menu'); // menu, creating, joining, lobby, playing
+// START SCREEN COMPONENT
+const StartScreen = ({ onCreateRoom, onJoinRoom }) => {
   const [playerName, setPlayerName] = useState('');
   const [roomCode, setRoomCode] = useState('');
+  const [error, setError] = useState('');
+
+  const handleCreate = () => {
+    if (!playerName.trim()) {
+      setError('Please enter your name');
+      return;
+    }
+    onCreateRoom(playerName);
+  };
+
+  const handleJoin = () => {
+    if (!playerName.trim() || !roomCode.trim()) {
+      setError('Please enter your name and room code');
+      return;
+    }
+    onJoinRoom(playerName, roomCode.toUpperCase());
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-red-900 via-gray-900 to-black text-white flex items-center justify-center p-4">
+      <div className="max-w-md w-full">
+        <div className="text-center mb-8">
+          <h1 className="text-5xl font-bold mb-2 text-red-500">SECRET HITLER</h1>
+          <p className="text-gray-400">Online Multiplayer Edition</p>
+        </div>
+
+        <div className="bg-gray-800 rounded-lg p-6 border border-red-900 mb-4">
+          <input
+            type="text"
+            placeholder="Enter your name"
+            value={playerName}
+            onChange={(e) => {
+              setPlayerName(e.target.value);
+              setError('');
+            }}
+            className="w-full px-4 py-3 bg-gray-700 rounded-lg border border-gray-600 focus:border-red-500 focus:outline-none mb-4"
+          />
+          
+          <button
+            onClick={handleCreate}
+            className="w-full py-3 bg-red-600 hover:bg-red-700 rounded-lg font-semibold transition mb-3"
+          >
+            Create New Room
+          </button>
+
+          <div className="relative my-4">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t border-gray-700"></div>
+            </div>
+            <div className="relative flex justify-center text-sm">
+              <span className="px-2 bg-gray-800 text-gray-400">OR</span>
+            </div>
+          </div>
+
+          <input
+            type="text"
+            placeholder="Enter room code"
+            value={roomCode}
+            onChange={(e) => {
+              setRoomCode(e.target.value.toUpperCase());
+              setError('');
+            }}
+            className="w-full px-4 py-3 bg-gray-700 rounded-lg border border-gray-600 focus:border-red-500 focus:outline-none mb-3"
+          />
+          
+          <button
+            onClick={handleJoin}
+            className="w-full py-3 bg-blue-600 hover:bg-blue-700 rounded-lg font-semibold transition"
+          >
+            Join Room
+          </button>
+
+          {error && (
+            <div className="mt-4 p-3 bg-red-900 bg-opacity-50 border border-red-500 rounded-lg flex items-center gap-2">
+              <AlertCircle size={20} />
+              <span className="text-sm">{error}</span>
+            </div>
+          )}
+        </div>
+
+        <div className="bg-gray-800 bg-opacity-50 rounded-lg p-4 text-sm text-gray-400">
+          <h3 className="font-semibold text-white mb-2">How to Play:</h3>
+          <ul className="space-y-1 list-disc list-inside">
+            <li>5-10 players required</li>
+            <li>Liberals vs Fascists (+ Hitler)</li>
+            <li>Enact 5 Liberal or 6 Fascist policies to win</li>
+            <li>Or assassinate Hitler / elect Hitler as Chancellor</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// LOBBY COMPONENT
+const LobbyScreen = ({ room, players, myPlayerId, onLeave, onStartGame, onDestroyRoom, onKickPlayer }) => {
+  const [copied, setCopied] = useState(false);
+  const [disconnectedPlayer, setDisconnectedPlayer] = useState(null);
+  const [reconnectTimer, setReconnectTimer] = useState(120);
+
+  const isLeader = players.find(p => p.id === myPlayerId)?.is_leader;
+  const connectedPlayers = players.filter(p => p.is_connected);
+
+  useEffect(() => {
+    const disconnected = players.find(p => !p.is_connected && p.role);
+    if (disconnected && room?.status === 'playing') {
+      setDisconnectedPlayer(disconnected);
+      setReconnectTimer(120);
+      
+      const interval = setInterval(() => {
+        setReconnectTimer(prev => {
+          if (prev <= 1) {
+            clearInterval(interval);
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+
+      return () => clearInterval(interval);
+    } else {
+      setDisconnectedPlayer(null);
+    }
+  }, [players, room]);
+
+  const copyRoomCode = () => {
+    navigator.clipboard.writeText(room.code);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-red-900 via-gray-900 to-black text-white p-4">
+      <div className="max-w-4xl mx-auto pt-8">
+        <div className="text-center mb-8">
+          <h1 className="text-5xl font-bold mb-2 text-red-500">SECRET HITLER</h1>
+          <p className="text-gray-400">Game Lobby</p>
+        </div>
+
+        <div className="bg-gray-800 rounded-lg p-6 border border-red-900">
+          <div className="flex items-center justify-between mb-6">
+            <div>
+              <h2 className="text-2xl font-bold mb-2">Waiting Room</h2>
+              <div className="flex items-center gap-2">
+                <span className="text-gray-400">Room Code:</span>
+                <code className="text-2xl font-mono text-red-400 font-bold">{room.code}</code>
+                <button
+                  onClick={copyRoomCode}
+                  className="p-2 hover:bg-gray-700 rounded transition"
+                >
+                  {copied ? <Check size={20} className="text-green-500" /> : <Copy size={20} />}
+                </button>
+              </div>
+            </div>
+            
+            <button
+              onClick={onLeave}
+              className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg flex items-center gap-2"
+            >
+              <LogOut size={18} />
+              Leave
+            </button>
+          </div>
+
+          <div className="mb-6">
+            <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
+              <Users size={20} />
+              Players ({connectedPlayers.length}/10)
+            </h3>
+            <div className="space-y-2">
+              {players.map(player => (
+                <div
+                  key={player.id}
+                  className={`p-3 rounded-lg flex items-center justify-between ${
+                    player.is_connected
+                      ? 'bg-gray-700'
+                      : 'bg-red-900 bg-opacity-30 border border-red-500'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className={`w-3 h-3 rounded-full ${
+                      player.is_connected ? 'bg-green-500' : 'bg-red-500'
+                    }`} />
+                    <span className={player.id === myPlayerId ? 'font-bold' : ''}>
+                      {player.name}
+                      {player.id === myPlayerId && ' (You)'}
+                    </span>
+                    {player.is_leader && (
+                      <Crown size={16} className="text-yellow-500" />
+                    )}
+                  </div>
+                  {!player.is_connected && (
+                    <span className="text-sm text-red-400">Disconnected</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {disconnectedPlayer && isLeader && reconnectTimer > 0 && (
+            <div className="mb-6 p-4 bg-yellow-900 bg-opacity-30 border border-yellow-500 rounded-lg">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <AlertCircle size={20} className="text-yellow-500" />
+                  <span className="font-semibold">Player Disconnected</span>
+                </div>
+                <span className="text-sm">{Math.floor(reconnectTimer / 60)}:{(reconnectTimer % 60).toString().padStart(2, '0')}</span>
+              </div>
+              <p className="text-sm text-gray-300 mb-3">
+                {disconnectedPlayer.name} has disconnected. They can rejoin with the same name within 2 minutes.
+              </p>
+              <button
+                onClick={() => onKickPlayer(disconnectedPlayer.id)}
+                className="px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg text-sm"
+              >
+                Kick Player & Continue
+              </button>
+            </div>
+          )}
+
+          {isLeader && (
+            <div className="space-y-3">
+              <button
+                onClick={onStartGame}
+                disabled={connectedPlayers.length < 5 || connectedPlayers.length > 10}
+                className="w-full py-3 bg-red-600 hover:bg-red-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold transition"
+              >
+                {connectedPlayers.length < 5
+                  ? `Need ${5 - connectedPlayers.length} more players`
+                  : connectedPlayers.length > 10
+                  ? 'Too many players (max 10)'
+                  : 'Start Game'}
+              </button>
+              
+              <button
+                onClick={onDestroyRoom}
+                className="w-full py-2 bg-red-900 hover:bg-red-800 rounded-lg text-sm"
+              >
+                Destroy Room
+              </button>
+            </div>
+          )}
+
+          {!isLeader && (
+            <div className="text-center text-gray-400 py-3">
+              Waiting for leader to start the game...
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ROLE REVEAL COMPONENT
+const RoleRevealScreen = ({ role, party, players, onContinue }) => {
+  const [showRole, setShowRole] = useState(false);
+
+  const fascists = players.filter(p => p.party === 'fascist' && p.role !== ROLES.HITLER);
+  const hitler = players.find(p => p.role === ROLES.HITLER);
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-red-900 via-gray-900 to-black text-white flex items-center justify-center p-4">
+      <div className="max-w-2xl w-full">
+        <div className="bg-gray-800 rounded-lg p-8 border border-red-900 text-center">
+          <h2 className="text-3xl font-bold mb-6">Your Secret Role</h2>
+          
+          <div className="mb-6">
+            <button
+              onClick={() => setShowRole(!showRole)}
+              className="px-6 py-3 bg-red-600 hover:bg-red-700 rounded-lg font-semibold flex items-center gap-2 mx-auto"
+            >
+              {showRole ? <EyeOff size={20} /> : <Eye size={20} />}
+              {showRole ? 'Hide Role' : 'Reveal Role'}
+            </button>
+          </div>
+
+          {showRole && (
+            <div className="space-y-4">
+              <div className={`p-6 rounded-lg border-4 ${
+                party === 'liberal'
+                  ? 'bg-blue-900 bg-opacity-30 border-blue-500'
+                  : 'bg-red-900 bg-opacity-30 border-red-500'
+              }`}>
+                <div className="text-4xl font-bold mb-2">
+                  {role === ROLES.HITLER ? '🎩 HITLER' : party === 'liberal' ? '🗽 LIBERAL' : '⚔️ FASCIST'}
+                </div>
+                <div className="text-xl">
+                  Party: {party.toUpperCase()}
+                </div>
+              </div>
+
+              {role === ROLES.HITLER && players.length <= 6 && (
+                <div className="text-sm text-gray-400 bg-gray-900 p-4 rounded-lg">
+                  <p className="mb-2">You are Hitler! Your Fascist teammate:</p>
+                  <ul className="text-left space-y-1">
+                    {fascists.map(p => (
+                      <li key={p.id} className="flex items-center gap-2">
+                        <Shield size={16} className="text-red-500" />
+                        {p.name}
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="mt-3 text-xs">Remember: Play as Liberal as possible!</p>
+                </div>
+              )}
+
+              {role === ROLES.HITLER && players.length > 6 && (
+                <div className="text-sm text-gray-400 bg-gray-900 p-4 rounded-lg">
+                  <p className="mb-2">You are Hitler!</p>
+                  <ul className="text-left list-disc list-inside space-y-1">
+                    <li>You don't know who the Fascists are</li>
+                    <li>Play as Liberal as possible</li>
+                    <li>Gain the trust of Liberals</li>
+                    <li>Win by getting elected Chancellor after 3 Fascist policies</li>
+                  </ul>
+                </div>
+              )}
+
+              {role === ROLES.FASCIST && (
+                <div className="text-sm text-gray-400 bg-gray-900 p-4 rounded-lg">
+                  <p className="mb-2">You are a Fascist! Your team:</p>
+                  <ul className="text-left space-y-1">
+                    {hitler && (
+                      <li className="flex items-center gap-2">
+                        <Skull size={16} className="text-red-600" />
+                        {hitler.name} <span className="text-red-500">(Hitler)</span>
+                      </li>
+                    )}
+                    {fascists.map(p => (
+                      <li key={p.id} className="flex items-center gap-2">
+                        <Shield size={16} className="text-red-500" />
+                        {p.name} <span className="text-orange-500">(Fascist)</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {role === ROLES.LIBERAL && (
+                <div className="text-sm text-gray-400 bg-gray-900 p-4 rounded-lg">
+                  <p>You are a Liberal! Your goals:</p>
+                  <ul className="text-left list-disc list-inside space-y-1 mt-2">
+                    <li>Enact 5 Liberal policies</li>
+                    <li>Or assassinate Hitler</li>
+                    <li>Be careful - you don't know who to trust!</li>
+                  </ul>
+                </div>
+              )}
+
+              <button
+                onClick={onContinue}
+                className="mt-6 px-8 py-3 bg-green-600 hover:bg-green-700 rounded-lg font-semibold transition"
+              >
+                Continue to Game
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// GAME BOARD COMPONENT
+const GameBoard = ({ room, players, myPlayerId, myRole, myParty, onLeave }) => {
+  const gameState = room.game_state || {};
+  const isLeader = players.find(p => p.id === myPlayerId)?.is_leader;
+  
+  const liberalPolicies = gameState.liberalPolicies || 0;
+  const fascistPolicies = gameState.fascistPolicies || 0;
+  const phase = gameState.phase || GAME_PHASES.NOMINATION;
+  
+  const connectedPlayers = players.filter(p => p.is_connected && !gameState.executedPlayers?.includes(p.id));
+  const presidentIndex = gameState.presidentIndex || 0;
+  const president = connectedPlayers[presidentIndex];
+  const isPresident = president?.id === myPlayerId;
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-red-900 via-gray-900 to-black text-white p-4">
+      <div className="max-w-6xl mx-auto pt-8">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-6">
+          <h1 className="text-4xl font-bold text-red-500">SECRET HITLER</h1>
+          <button
+            onClick={onLeave}
+            className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg flex items-center gap-2"
+          >
+            <LogOut size={18} />
+            Leave
+          </button>
+        </div>
+
+        {/* Policy Boards */}
+        <div className="grid grid-cols-2 gap-4 mb-6">
+          <div className="bg-blue-900 bg-opacity-30 p-6 rounded-lg border-2 border-blue-500">
+            <h3 className="text-xl font-semibold mb-3 flex items-center gap-2">
+              <Shield size={24} />
+              Liberal Policies
+            </h3>
+            <div className="flex gap-2">
+              {[...Array(5)].map((_, i) => (
+                <div
+                  key={i}
+                  className={`w-12 h-16 rounded border-2 ${
+                    i < liberalPolicies
+                      ? 'bg-blue-600 border-blue-400'
+                      : 'bg-gray-700 border-gray-600'
+                  }`}
+                />
+              ))}
+            </div>
+          </div>
+
+          <div className="bg-red-900 bg-opacity-30 p-6 rounded-lg border-2 border-red-500">
+            <h3 className="text-xl font-semibold mb-3 flex items-center gap-2">
+              <Skull size={24} />
+              Fascist Policies
+            </h3>
+            <div className="flex gap-2">
+              {[...Array(6)].map((_, i) => (
+                <div
+                  key={i}
+                  className={`w-12 h-16 rounded border-2 ${
+                    i < fascistPolicies
+                      ? 'bg-red-600 border-red-400'
+                      : 'bg-gray-700 border-gray-600'
+                  }`}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Game Info */}
+        <div className="bg-gray-800 rounded-lg p-6 border border-red-900 mb-6">
+          <div className="grid grid-cols-2 gap-4 mb-4">
+            <div>
+              <span className="text-gray-400">Your Role:</span>
+              <div className={`font-bold text-lg ${myParty === 'liberal' ? 'text-blue-400' : 'text-red-400'}`}>
+                {myRole === ROLES.HITLER ? 'Hitler' : myRole === ROLES.FASCIST ? 'Fascist' : 'Liberal'}
+              </div>
+            </div>
+            <div>
+              <span className="text-gray-400">Phase:</span>
+              <div className="font-bold text-lg text-yellow-400">
+                {phase.replace(/_/g, ' ').toUpperCase()}
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <span className="text-gray-400">Current President:</span>
+            <div className="font-bold text-lg flex items-center gap-2">
+              <Crown size={20} className="text-yellow-500" />
+              {president?.name || 'None'}
+              {isPresident && <span className="text-yellow-500">(You)</span>}
+            </div>
+          </div>
+        </div>
+
+        {/* Players List */}
+        <div className="bg-gray-800 rounded-lg p-6 border border-red-900">
+          <h3 className="text-xl font-semibold mb-4">Players</h3>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+            {connectedPlayers.map((player, index) => (
+              <div
+                key={player.id}
+                className={`p-3 rounded-lg border-2 ${
+                  player.id === president?.id
+                    ? 'bg-yellow-900 bg-opacity-30 border-yellow-500'
+                    : 'bg-gray-700 border-gray-600'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  {player.id === president?.id && <Crown size={16} className="text-yellow-500" />}
+                  <span className={player.id === myPlayerId ? 'font-bold' : ''}>
+                    {player.name}
+                    {player.id === myPlayerId && ' (You)'}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Placeholder for game actions */}
+        <div className="mt-6 text-center text-gray-400 bg-gray-800 rounded-lg p-8 border border-red-900">
+          <p className="text-lg">Game mechanics coming next...</p>
+          <p className="text-sm mt-2">This includes nomination, voting, legislative session, and executive actions</p>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// MAIN APP COMPONENT
+const SecretHitlerGame = () => {
+  const [currentView, setCurrentView] = useState('start'); // start, lobby, role_reveal, game
   const [currentRoom, setCurrentRoom] = useState(null);
   const [players, setPlayers] = useState([]);
   const [myPlayerId, setMyPlayerId] = useState(null);
-  const [copied, setCopied] = useState(false);
-  const [error, setError] = useState('');
-  const [showReconnectPrompt, setShowReconnectPrompt] = useState(false);
-  const [disconnectedPlayer, setDisconnectedPlayer] = useState(null);
-  const [reconnectTimer, setReconnectTimer] = useState(120);
-  
-  // Game specific states
   const [myRole, setMyRole] = useState(null);
   const [myParty, setMyParty] = useState(null);
-  const [gamePhase, setGamePhase] = useState(GAME_PHASES.LOBBY);
-  const [liberalPolicies, setLiberalPolicies] = useState(0);
-  const [fascistPolicies, setFascistPolicies] = useState(0);
-  const [president, setPresident] = useState(null);
-  const [chancellor, setChancellor] = useState(null);
-  const [nominatedChancellor, setNominatedChancellor] = useState(null);
-  const [votes, setVotes] = useState({});
-  const [showRole, setShowRole] = useState(false);
-  const [policyDeck, setPolicyDeck] = useState([]);
-  const [presidentHand, setPresidentHand] = useState([]);
-  const [chancellorHand, setChancellorHand] = useState([]);
-  const [electionTracker, setElectionTracker] = useState(0);
-  const [executedPlayers, setExecutedPlayers] = useState([]);
-  const [investigatedPlayers, setInvestigatedPlayers] = useState([]);
+  const [error, setError] = useState('');
 
-  // Generate random room code
+  // Generate room code
   const generateRoomCode = () => {
     return Math.random().toString(36).substring(2, 8).toUpperCase();
   };
 
   // Create room
-  const createRoom = async () => {
-    if (!playerName.trim()) {
-      setError('Please enter your name');
-      return;
-    }
-
+  const handleCreateRoom = async (playerName) => {
     try {
       const code = generateRoomCode();
       
@@ -106,7 +578,7 @@ const SecretHitlerGame = () => {
           code,
           leader_id: null,
           status: 'waiting',
-          game_state: {}
+          game_state: { phase: GAME_PHASES.LOBBY }
         })
         .select()
         .single();
@@ -135,10 +607,7 @@ const SecretHitlerGame = () => {
 
       setCurrentRoom(room);
       setMyPlayerId(player.id);
-      setRoomCode(code);
-      setGameState('lobby');
-      setError('');
-
+      setCurrentView('lobby');
       subscribeToRoom(room.id);
     } catch (err) {
       setError('Failed to create room: ' + err.message);
@@ -146,22 +615,16 @@ const SecretHitlerGame = () => {
   };
 
   // Join room
-  const joinRoom = async () => {
-    if (!playerName.trim() || !roomCode.trim()) {
-      setError('Please enter your name and room code');
-      return;
-    }
-
+  const handleJoinRoom = async (playerName, roomCode) => {
     try {
       const { data: room, error: roomError } = await supabase
         .from('rooms')
         .select('*')
-        .eq('code', roomCode.toUpperCase())
+        .eq('code', roomCode)
         .single();
 
       if (roomError) throw new Error('Room not found');
 
-      // Check if player was previously in this room (for reconnection)
       const { data: existingPlayer } = await supabase
         .from('players')
         .select('*')
@@ -171,7 +634,6 @@ const SecretHitlerGame = () => {
 
       let player;
       if (existingPlayer) {
-        // Reconnecting player
         const { data: updatedPlayer, error: updateError } = await supabase
           .from('players')
           .update({ is_connected: true })
@@ -184,7 +646,6 @@ const SecretHitlerGame = () => {
         setMyRole(player.role);
         setMyParty(player.party);
       } else {
-        // New player
         const { data: newPlayer, error: playerError } = await supabase
           .from('players')
           .insert({
@@ -204,29 +665,27 @@ const SecretHitlerGame = () => {
 
       setCurrentRoom(room);
       setMyPlayerId(player.id);
-      setRoomCode(room.code);
-      setGameState('lobby');
-      setError('');
-
+      
+      // Determine view based on room status
+      if (room.status === 'playing' && player.role) {
+        setCurrentView('game');
+      } else {
+        setCurrentView('lobby');
+      }
+      
       subscribeToRoom(room.id);
     } catch (err) {
       setError('Failed to join room: ' + err.message);
+      setTimeout(() => setError(''), 3000);
     }
   };
 
   // Subscribe to room updates
   const subscribeToRoom = (roomId) => {
-    // Unsubscribe from any existing subscriptions first
     supabase.removeAllChannels();
 
-    // Subscribe to players changes
     const playersChannel = supabase
-      .channel(`players-${roomId}`, {
-        config: {
-          broadcast: { self: true },
-          presence: { key: myPlayerId }
-        }
-      })
+      .channel(`players-${roomId}`)
       .on('postgres_changes', 
         { 
           event: '*', 
@@ -234,19 +693,10 @@ const SecretHitlerGame = () => {
           table: 'players', 
           filter: `room_id=eq.${roomId}` 
         },
-        (payload) => {
-          console.log('Player change detected:', payload);
-          loadPlayers(roomId);
-        }
+        () => loadPlayers(roomId)
       )
-      .subscribe((status) => {
-        console.log('Players subscription status:', status);
-        if (status === 'SUBSCRIBED') {
-          console.log('✅ Successfully subscribed to players channel');
-        }
-      });
+      .subscribe();
 
-    // Subscribe to room changes
     const roomChannel = supabase
       .channel(`room-${roomId}`)
       .on('postgres_changes',
@@ -257,31 +707,44 @@ const SecretHitlerGame = () => {
           filter: `id=eq.${roomId}` 
         },
         (payload) => {
-          console.log('Room change detected:', payload);
           setCurrentRoom(payload.new);
-          if (payload.new.game_state) {
-            updateGameState(payload.new.game_state);
+          
+          // Handle game start
+          if (payload.new.status === 'playing' && payload.new.game_state?.phase === GAME_PHASES.ROLE_REVEAL) {
+            loadPlayers(roomId).then(() => {
+              setCurrentView('role_reveal');
+            });
           }
         }
       )
-      .subscribe((status) => {
-        console.log('Room subscription status:', status);
-      });
+      .subscribe();
 
-    // Initial load
     loadPlayers(roomId);
 
-    // Polling fallback - check for updates every 2 seconds
+    // Polling fallback
     const pollingInterval = setInterval(() => {
       loadPlayers(roomId);
+      loadRoom(roomId);
     }, 2000);
 
     return () => {
-      console.log('Unsubscribing from channels');
       clearInterval(pollingInterval);
       playersChannel.unsubscribe();
       roomChannel.unsubscribe();
     };
+  };
+
+  // Load room
+  const loadRoom = async (roomId) => {
+    const { data, error } = await supabase
+      .from('rooms')
+      .select('*')
+      .eq('id', roomId)
+      .single();
+
+    if (!error && data) {
+      setCurrentRoom(data);
+    }
   };
 
   // Load players
@@ -299,16 +762,13 @@ const SecretHitlerGame = () => {
       }
 
       if (data) {
-        console.log('Loaded players:', data);
         setPlayers(data);
         
-        // Check for disconnected players
-        const disconnected = data.find(p => !p.is_connected && p.role);
-        if (disconnected && currentRoom?.status === 'playing') {
-          setDisconnectedPlayer(disconnected);
-          startReconnectTimer();
-        } else {
-          setDisconnectedPlayer(null);
+        // Update my role if it exists
+        const me = data.find(p => p.id === myPlayerId);
+        if (me && me.role) {
+          setMyRole(me.role);
+          setMyParty(me.party);
         }
       }
     } catch (err) {
@@ -316,74 +776,8 @@ const SecretHitlerGame = () => {
     }
   };
 
-  // Start reconnect timer
-  const startReconnectTimer = () => {
-    setReconnectTimer(120);
-    const interval = setInterval(() => {
-      setReconnectTimer(prev => {
-        if (prev <= 1) {
-          clearInterval(interval);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-  };
-
-  // Handle player leaving
-  const handleLeaveRoom = async () => {
-    if (!myPlayerId || !currentRoom) return;
-
-    try {
-      await supabase
-        .from('players')
-        .update({ is_connected: false })
-        .eq('id', myPlayerId);
-
-      setGameState('menu');
-      setCurrentRoom(null);
-      setMyPlayerId(null);
-      setPlayers([]);
-    } catch (err) {
-      console.error('Error leaving room:', err);
-    }
-  };
-
-  // Destroy room (leader only)
-  const destroyRoom = async () => {
-    if (!currentRoom) return;
-
-    try {
-      await supabase
-        .from('rooms')
-        .delete()
-        .eq('id', currentRoom.id);
-
-      setGameState('menu');
-      setCurrentRoom(null);
-      setMyPlayerId(null);
-      setPlayers([]);
-    } catch (err) {
-      setError('Failed to destroy room: ' + err.message);
-    }
-  };
-
-  // Kick disconnected player
-  const kickPlayer = async (playerId) => {
-    try {
-      await supabase
-        .from('players')
-        .delete()
-        .eq('id', playerId);
-
-      setDisconnectedPlayer(null);
-    } catch (err) {
-      setError('Failed to kick player: ' + err.message);
-    }
-  };
-
   // Start game
-  const startGame = async () => {
+  const handleStartGame = async () => {
     const connectedPlayers = players.filter(p => p.is_connected);
     
     if (connectedPlayers.length < 5 || connectedPlayers.length > 10) {
@@ -392,7 +786,6 @@ const SecretHitlerGame = () => {
     }
 
     try {
-      // Assign roles
       const distribution = getRoleDistribution(connectedPlayers.length);
       const roles = [
         ...Array(distribution.liberal).fill(ROLES.LIBERAL),
@@ -400,10 +793,8 @@ const SecretHitlerGame = () => {
         ROLES.HITLER
       ];
       
-      // Shuffle roles
       const shuffledRoles = roles.sort(() => Math.random() - 0.5);
       
-      // Assign to players
       for (let i = 0; i < connectedPlayers.length; i++) {
         const role = shuffledRoles[i];
         const party = role === ROLES.LIBERAL ? 'liberal' : 'fascist';
@@ -419,13 +810,11 @@ const SecretHitlerGame = () => {
         }
       }
 
-      // Create policy deck
       const deck = [
         ...Array(6).fill('liberal'),
         ...Array(11).fill('fascist')
       ].sort(() => Math.random() - 0.5);
 
-      // Update room
       const gameState = {
         phase: GAME_PHASES.ROLE_REVEAL,
         liberalPolicies: 0,
@@ -449,37 +838,69 @@ const SecretHitlerGame = () => {
         })
         .eq('id', currentRoom.id);
 
-      setGamePhase(GAME_PHASES.ROLE_REVEAL);
+      setCurrentView('role_reveal');
     } catch (err) {
       setError('Failed to start game: ' + err.message);
     }
   };
 
-  // Update local game state from room
-  const updateGameState = (state) => {
-    if (!state) return;
-    
-    setGamePhase(state.phase || GAME_PHASES.LOBBY);
-    setLiberalPolicies(state.liberalPolicies || 0);
-    setFascistPolicies(state.fascistPolicies || 0);
-    setPolicyDeck(state.policyDeck || []);
-    setElectionTracker(state.electionTracker || 0);
-    setExecutedPlayers(state.executedPlayers || []);
-    setInvestigatedPlayers(state.investigatedPlayers || []);
-    
-    if (state.presidentIndex !== undefined) {
-      const connectedPlayers = players.filter(p => p.is_connected);
-      setPresident(connectedPlayers[state.presidentIndex]);
-    }
-    
-    setChancellor(state.chancellor ? players.find(p => p.id === state.chancellor) : null);
+  // Continue from role reveal
+  const handleContinueFromRoleReveal = () => {
+    setCurrentView('game');
   };
 
-  // Copy room code
-  const copyRoomCode = () => {
-    navigator.clipboard.writeText(roomCode);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  // Leave room
+  const handleLeaveRoom = async () => {
+    if (!myPlayerId || !currentRoom) return;
+
+    try {
+      await supabase
+        .from('players')
+        .update({ is_connected: false })
+        .eq('id', myPlayerId);
+
+      setCurrentView('start');
+      setCurrentRoom(null);
+      setMyPlayerId(null);
+      setPlayers([]);
+      setMyRole(null);
+      setMyParty(null);
+      supabase.removeAllChannels();
+    } catch (err) {
+      console.error('Error leaving room:', err);
+    }
+  };
+
+  // Destroy room
+  const handleDestroyRoom = async () => {
+    if (!currentRoom) return;
+
+    try {
+      await supabase
+        .from('rooms')
+        .delete()
+        .eq('id', currentRoom.id);
+
+      setCurrentView('start');
+      setCurrentRoom(null);
+      setMyPlayerId(null);
+      setPlayers([]);
+      supabase.removeAllChannels();
+    } catch (err) {
+      setError('Failed to destroy room: ' + err.message);
+    }
+  };
+
+  // Kick player
+  const handleKickPlayer = async (playerId) => {
+    try {
+      await supabase
+        .from('players')
+        .delete()
+        .eq('id', playerId);
+    } catch (err) {
+      setError('Failed to kick player: ' + err.message);
+    }
   };
 
   // Cleanup on unmount
@@ -492,301 +913,48 @@ const SecretHitlerGame = () => {
     };
   }, []);
 
-  const isLeader = players.find(p => p.id === myPlayerId)?.is_leader;
-  const connectedPlayers = players.filter(p => p.is_connected);
-
   return (
-    <div className="min-h-screen bg-gradient-to-br from-red-900 via-gray-900 to-black text-white p-4">
-      <div className="max-w-6xl mx-auto">
-        {/* Header */}
-        <div className="text-center mb-8 pt-8">
-          <h1 className="text-5xl font-bold mb-2 text-red-500">SECRET HITLER</h1>
-          <p className="text-gray-400">Online Multiplayer Edition</p>
-        </div>
+    <>
+      {currentView === 'start' && (
+        <StartScreen 
+          onCreateRoom={handleCreateRoom}
+          onJoinRoom={handleJoinRoom}
+        />
+      )}
 
-        {/* Menu Screen */}
-        {gameState === 'menu' && (
-          <div className="max-w-md mx-auto space-y-4">
-            <div className="bg-gray-800 rounded-lg p-6 border border-red-900">
-              <input
-                type="text"
-                placeholder="Enter your name"
-                value={playerName}
-                onChange={(e) => setPlayerName(e.target.value)}
-                className="w-full px-4 py-3 bg-gray-700 rounded-lg border border-gray-600 focus:border-red-500 focus:outline-none mb-4"
-              />
-              
-              <button
-                onClick={createRoom}
-                className="w-full py-3 bg-red-600 hover:bg-red-700 rounded-lg font-semibold transition mb-3"
-              >
-                Create New Room
-              </button>
+      {currentView === 'lobby' && currentRoom && (
+        <LobbyScreen
+          room={currentRoom}
+          players={players}
+          myPlayerId={myPlayerId}
+          onLeave={handleLeaveRoom}
+          onStartGame={handleStartGame}
+          onDestroyRoom={handleDestroyRoom}
+          onKickPlayer={handleKickPlayer}
+        />
+      )}
 
-              <div className="relative my-4">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-gray-700"></div>
-                </div>
-                <div className="relative flex justify-center text-sm">
-                  <span className="px-2 bg-gray-800 text-gray-400">OR</span>
-                </div>
-              </div>
+      {currentView === 'role_reveal' && myRole && (
+        <RoleRevealScreen
+          role={myRole}
+          party={myParty}
+          players={players}
+          onContinue={handleContinueFromRoleReveal}
+        />
+      )}
 
-              <input
-                type="text"
-                placeholder="Enter room code"
-                value={roomCode}
-                onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
-                className="w-full px-4 py-3 bg-gray-700 rounded-lg border border-gray-600 focus:border-red-500 focus:outline-none mb-3"
-              />
-              
-              <button
-                onClick={joinRoom}
-                className="w-full py-3 bg-blue-600 hover:bg-blue-700 rounded-lg font-semibold transition"
-              >
-                Join Room
-              </button>
-
-              {error && (
-                <div className="mt-4 p-3 bg-red-900 bg-opacity-50 border border-red-500 rounded-lg flex items-center gap-2">
-                  <AlertCircle size={20} />
-                  <span className="text-sm">{error}</span>
-                </div>
-              )}
-            </div>
-
-            <div className="bg-gray-800 bg-opacity-50 rounded-lg p-4 text-sm text-gray-400">
-              <h3 className="font-semibold text-white mb-2">How to Play:</h3>
-              <ul className="space-y-1 list-disc list-inside">
-                <li>5-10 players required</li>
-                <li>Liberals vs Fascists (+ Hitler)</li>
-                <li>Enact 5 Liberal or 6 Fascist policies to win</li>
-                <li>Or assassinate Hitler / elect Hitler as Chancellor</li>
-              </ul>
-            </div>
-          </div>
-        )}
-
-        {/* Lobby Screen */}
-        {gameState === 'lobby' && (
-          <div className="max-w-2xl mx-auto">
-            <div className="bg-gray-800 rounded-lg p-6 border border-red-900">
-              <div className="flex items-center justify-between mb-6">
-                <div>
-                  <h2 className="text-2xl font-bold mb-2">Game Lobby</h2>
-                  <div className="flex items-center gap-2">
-                    <span className="text-gray-400">Room Code:</span>
-                    <code className="text-2xl font-mono text-red-400 font-bold">{roomCode}</code>
-                    <button
-                      onClick={copyRoomCode}
-                      className="p-2 hover:bg-gray-700 rounded transition"
-                    >
-                      {copied ? <Check size={20} className="text-green-500" /> : <Copy size={20} />}
-                    </button>
-                  </div>
-                </div>
-                
-                <button
-                  onClick={handleLeaveRoom}
-                  className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg flex items-center gap-2"
-                >
-                  <LogOut size={18} />
-                  Leave
-                </button>
-              </div>
-
-              <div className="mb-6">
-                <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
-                  <Users size={20} />
-                  Players ({connectedPlayers.length}/10)
-                </h3>
-                <div className="space-y-2">
-                  {players.map(player => (
-                    <div
-                      key={player.id}
-                      className={`p-3 rounded-lg flex items-center justify-between ${
-                        player.is_connected
-                          ? 'bg-gray-700'
-                          : 'bg-red-900 bg-opacity-30 border border-red-500'
-                      }`}
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className={`w-3 h-3 rounded-full ${
-                          player.is_connected ? 'bg-green-500' : 'bg-red-500'
-                        }`} />
-                        <span className={player.id === myPlayerId ? 'font-bold' : ''}>
-                          {player.name}
-                          {player.id === myPlayerId && ' (You)'}
-                        </span>
-                        {player.is_leader && (
-                          <Crown size={16} className="text-yellow-500" />
-                        )}
-                      </div>
-                      {!player.is_connected && (
-                        <span className="text-sm text-red-400">Disconnected</span>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Disconnected player warning */}
-              {disconnectedPlayer && isLeader && reconnectTimer > 0 && (
-                <div className="mb-6 p-4 bg-yellow-900 bg-opacity-30 border border-yellow-500 rounded-lg">
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-2">
-                      <AlertCircle size={20} className="text-yellow-500" />
-                      <span className="font-semibold">Player Disconnected</span>
-                    </div>
-                    <span className="text-sm">{Math.floor(reconnectTimer / 60)}:{(reconnectTimer % 60).toString().padStart(2, '0')}</span>
-                  </div>
-                  <p className="text-sm text-gray-300 mb-3">
-                    {disconnectedPlayer.name} has disconnected. They can rejoin with the same name within 2 minutes.
-                  </p>
-                  <button
-                    onClick={() => kickPlayer(disconnectedPlayer.id)}
-                    className="px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg text-sm"
-                  >
-                    Kick Player & Continue
-                  </button>
-                </div>
-              )}
-
-              {isLeader && (
-                <div className="space-y-3">
-                  <button
-                    onClick={startGame}
-                    disabled={connectedPlayers.length < 5 || connectedPlayers.length > 10}
-                    className="w-full py-3 bg-red-600 hover:bg-red-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold transition"
-                  >
-                    {connectedPlayers.length < 5
-                      ? `Need ${5 - connectedPlayers.length} more players`
-                      : connectedPlayers.length > 10
-                      ? 'Too many players (max 10)'
-                      : 'Start Game'}
-                  </button>
-                  
-                  <button
-                    onClick={destroyRoom}
-                    className="w-full py-2 bg-red-900 hover:bg-red-800 rounded-lg text-sm"
-                  >
-                    Destroy Room
-                  </button>
-                </div>
-              )}
-
-              {!isLeader && (
-                <div className="text-center text-gray-400 py-3">
-                  Waiting for leader to start the game...
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Role Reveal Screen */}
-        {gameState === 'lobby' && gamePhase === GAME_PHASES.ROLE_REVEAL && myRole && (
-          <div className="max-w-2xl mx-auto mt-8">
-            <div className="bg-gray-800 rounded-lg p-8 border border-red-900 text-center">
-              <h2 className="text-3xl font-bold mb-6">Your Secret Role</h2>
-              
-              <div className="mb-6">
-                <button
-                  onClick={() => setShowRole(!showRole)}
-                  className="px-6 py-3 bg-red-600 hover:bg-red-700 rounded-lg font-semibold flex items-center gap-2 mx-auto"
-                >
-                  {showRole ? <EyeOff size={20} /> : <Eye size={20} />}
-                  {showRole ? 'Hide Role' : 'Reveal Role'}
-                </button>
-              </div>
-
-              {showRole && (
-                <div className="space-y-4">
-                  <div className={`p-6 rounded-lg border-4 ${
-                    myParty === 'liberal'
-                      ? 'bg-blue-900 bg-opacity-30 border-blue-500'
-                      : 'bg-red-900 bg-opacity-30 border-red-500'
-                  }`}>
-                    <div className="text-4xl font-bold mb-2">
-                      {myRole === ROLES.HITLER ? '🎩 HITLER' : myParty === 'liberal' ? '🗽 LIBERAL' : '⚔️ FASCIST'}
-                    </div>
-                    <div className="text-xl">
-                      Party: {myParty.toUpperCase()}
-                    </div>
-                  </div>
-
-                  {myRole === ROLES.HITLER && (
-                    <div className="text-sm text-gray-400 bg-gray-900 p-4 rounded-lg">
-                      <p className="mb-2">You are Hitler! Remember:</p>
-                      <ul className="text-left list-disc list-inside space-y-1">
-                        <li>Play as Liberal as possible</li>
-                        <li>Gain the trust of Liberals</li>
-                        <li>Let other Fascists advance the agenda</li>
-                        <li>Win by getting elected Chancellor after 3 Fascist policies</li>
-                      </ul>
-                    </div>
-                  )}
-
-                  {myRole === ROLES.FASCIST && (
-                    <div className="text-sm text-gray-400 bg-gray-900 p-4 rounded-lg">
-                      <p className="mb-2">You are a Fascist! Your teammates:</p>
-                      <ul className="text-left space-y-1">
-                        {players
-                          .filter(p => p.party === 'fascist' && p.id !== myPlayerId)
-                          .map(p => (
-                            <li key={p.id}>
-                              {p.name} {p.role === ROLES.HITLER ? '(Hitler)' : '(Fascist)'}
-                            </li>
-                          ))}
-                      </ul>
-                    </div>
-                  )}
-
-                  {myRole === ROLES.LIBERAL && (
-                    <div className="text-sm text-gray-400 bg-gray-900 p-4 rounded-lg">
-                      <p>You are a Liberal! Work with other Liberals to:</p>
-                      <ul className="text-left list-disc list-inside space-y-1 mt-2">
-                        <li>Enact 5 Liberal policies</li>
-                        <li>Or assassinate Hitler</li>
-                        <li>Be careful - you don't know who to trust!</li>
-                      </ul>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              <div className="mt-6 text-gray-400 text-sm">
-                Game will start shortly...
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Game Board - Placeholder for actual gameplay */}
-        {currentRoom?.status === 'playing' && gamePhase !== GAME_PHASES.ROLE_REVEAL && (
-          <div className="space-y-6">
-            <div className="bg-gray-800 rounded-lg p-6 border border-red-900">
-              <div className="grid grid-cols-2 gap-4 mb-6">
-                <div className="bg-blue-900 bg-opacity-30 p-4 rounded-lg border border-blue-500">
-                  <h3 className="text-lg font-semibold mb-2">Liberal Policies</h3>
-                  <div className="text-4xl font-bold">{liberalPolicies} / 5</div>
-                </div>
-                <div className="bg-red-900 bg-opacity-30 p-4 rounded-lg border border-red-500">
-                  <h3 className="text-lg font-semibold mb-2">Fascist Policies</h3>
-                  <div className="text-4xl font-bold">{fascistPolicies} / 6</div>
-                </div>
-              </div>
-
-              <div className="text-center text-gray-400">
-                <p className="mb-2">Game Phase: {gamePhase.replace('_', ' ').toUpperCase()}</p>
-                <p className="text-sm">Full gameplay implementation coming next...</p>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
+      {currentView === 'game' && currentRoom && myRole && (
+        <GameBoard
+          room={currentRoom}
+          players={players}
+          myPlayerId={myPlayerId}
+          myRole={myRole}
+          myParty={myParty}
+          onLeave={handleLeaveRoom}
+        />
+      )}
+    </>
   );
 };
 
-export default SecretHitlerGame;
+export default SecretHitlerGame
