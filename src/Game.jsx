@@ -561,6 +561,9 @@ const SecretHitlerGame = () => {
   const [myRole, setMyRole] = useState(null);
   const [myParty, setMyParty] = useState(null);
   const [error, setError] = useState('');
+  const [isSubscribed, setIsSubscribed] = useState(false);
+  const pollingIntervalRef = React.useRef(null);
+  const subscriptionsRef = React.useRef([]);
 
   // Generate room code
   const generateRoomCode = () => {
@@ -682,10 +685,27 @@ const SecretHitlerGame = () => {
 
   // Subscribe to room updates
   const subscribeToRoom = (roomId) => {
-    supabase.removeAllChannels();
+    // Clean up any existing subscriptions first
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
+      pollingIntervalRef.current = null;
+    }
+    
+    subscriptionsRef.current.forEach(sub => {
+      try {
+        sub.unsubscribe();
+      } catch (e) {
+        console.error('Error unsubscribing:', e);
+      }
+    });
+    subscriptionsRef.current = [];
+    
+    console.log('Subscribing to room:', roomId);
+    setIsSubscribed(false);
 
+    // Subscribe to players changes
     const playersChannel = supabase
-      .channel(`players-${roomId}`)
+      .channel(`players-${roomId}-${Date.now()}`)
       .on('postgres_changes', 
         { 
           event: '*', 
@@ -693,12 +713,21 @@ const SecretHitlerGame = () => {
           table: 'players', 
           filter: `room_id=eq.${roomId}` 
         },
-        () => loadPlayers(roomId)
+        () => {
+          console.log('Player change detected');
+          loadPlayers(roomId);
+        }
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log('Players subscription status:', status);
+        if (status === 'SUBSCRIBED') {
+          setIsSubscribed(true);
+        }
+      });
 
+    // Subscribe to room changes
     const roomChannel = supabase
-      .channel(`room-${roomId}`)
+      .channel(`room-${roomId}-${Date.now()}`)
       .on('postgres_changes',
         { 
           event: 'UPDATE', 
@@ -707,51 +736,61 @@ const SecretHitlerGame = () => {
           filter: `id=eq.${roomId}` 
         },
         async (payload) => {
-          console.log('Room updated:', payload.new);
+          console.log('Room change detected:', payload.new);
           setCurrentRoom(payload.new);
           
-          // Handle game start - load players first to get roles
-          if (payload.new.status === 'playing' && payload.new.game_state?.phase === GAME_PHASES.ROLE_REVEAL) {
+          // Handle game start
+          if (payload.new.status === 'playing' && 
+              payload.new.game_state?.phase === GAME_PHASES.ROLE_REVEAL &&
+              currentView === 'lobby') {
             await loadPlayers(roomId);
-            setCurrentView('role_reveal');
+            setTimeout(() => setCurrentView('role_reveal'), 100);
           }
         }
       )
-      .subscribe();
-
-    loadPlayers(roomId);
-
-    // Polling fallback
-    const pollingInterval = setInterval(() => {
-      loadPlayers(roomId);
-      loadRoom(roomId).then(room => {
-        // Check if game started
-        if (room && room.status === 'playing' && room.game_state?.phase === GAME_PHASES.ROLE_REVEAL && currentView === 'lobby') {
-          setCurrentView('role_reveal');
-        }
+      .subscribe((status) => {
+        console.log('Room subscription status:', status);
       });
-    }, 2000);
 
-    return () => {
-      clearInterval(pollingInterval);
-      playersChannel.unsubscribe();
-      roomChannel.unsubscribe();
-    };
+    subscriptionsRef.current = [playersChannel, roomChannel];
+
+    // Initial load
+    loadPlayers(roomId);
+    loadRoom(roomId);
+
+    // Polling fallback - only if realtime isn't working
+    pollingIntervalRef.current = setInterval(async () => {
+      const room = await loadRoom(roomId);
+      await loadPlayers(roomId);
+      
+      // Check if game started while in lobby
+      if (room && 
+          room.status === 'playing' && 
+          room.game_state?.phase === GAME_PHASES.ROLE_REVEAL && 
+          currentView === 'lobby') {
+        setCurrentView('role_reveal');
+      }
+    }, 3000); // Increased to 3 seconds to reduce lag
   };
 
   // Load room
   const loadRoom = async (roomId) => {
-    const { data, error } = await supabase
-      .from('rooms')
-      .select('*')
-      .eq('id', roomId)
-      .single();
+    try {
+      const { data, error } = await supabase
+        .from('rooms')
+        .select('*')
+        .eq('id', roomId)
+        .single();
 
-    if (!error && data) {
-      setCurrentRoom(data);
-      return data;
+      if (!error && data) {
+        setCurrentRoom(data);
+        return data;
+      }
+      return null;
+    } catch (err) {
+      console.error('Error loading room:', err);
+      return null;
     }
-    return null;
   };
 
   // Load players
@@ -861,6 +900,21 @@ const SecretHitlerGame = () => {
     if (!myPlayerId || !currentRoom) return;
 
     try {
+      // Clean up subscriptions
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+        pollingIntervalRef.current = null;
+      }
+      
+      subscriptionsRef.current.forEach(sub => {
+        try {
+          sub.unsubscribe();
+        } catch (e) {
+          console.error('Error unsubscribing:', e);
+        }
+      });
+      subscriptionsRef.current = [];
+
       await supabase
         .from('players')
         .update({ is_connected: false })
@@ -872,7 +926,7 @@ const SecretHitlerGame = () => {
       setPlayers([]);
       setMyRole(null);
       setMyParty(null);
-      supabase.removeAllChannels();
+      setIsSubscribed(false);
     } catch (err) {
       console.error('Error leaving room:', err);
     }
@@ -883,6 +937,21 @@ const SecretHitlerGame = () => {
     if (!currentRoom) return;
 
     try {
+      // Clean up subscriptions
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+        pollingIntervalRef.current = null;
+      }
+      
+      subscriptionsRef.current.forEach(sub => {
+        try {
+          sub.unsubscribe();
+        } catch (e) {
+          console.error('Error unsubscribing:', e);
+        }
+      });
+      subscriptionsRef.current = [];
+
       await supabase
         .from('rooms')
         .delete()
@@ -892,7 +961,7 @@ const SecretHitlerGame = () => {
       setCurrentRoom(null);
       setMyPlayerId(null);
       setPlayers([]);
-      supabase.removeAllChannels();
+      setIsSubscribed(false);
     } catch (err) {
       setError('Failed to destroy room: ' + err.message);
     }
@@ -913,25 +982,21 @@ const SecretHitlerGame = () => {
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      if (currentRoom) {
-        handleLeaveRoom();
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
       }
-      supabase.removeAllChannels();
+      subscriptionsRef.current.forEach(sub => {
+        try {
+          sub.unsubscribe();
+        } catch (e) {
+          console.error('Error unsubscribing:', e);
+        }
+      });
     };
   }, []);
 
-  // Monitor room status for view changes
-  useEffect(() => {
-    if (!currentRoom) return;
-    
-    // If game started, switch to role reveal
-    if (currentRoom.status === 'playing' && 
-        currentRoom.game_state?.phase === GAME_PHASES.ROLE_REVEAL && 
-        currentView === 'lobby' && 
-        myRole) {
-      setCurrentView('role_reveal');
-    }
-  }, [currentRoom, myRole, currentView]);
+  // Monitor room status for view changes (removed to prevent conflicts)
+  // The subscribeToRoom function now handles this
 
   return (
     <>
