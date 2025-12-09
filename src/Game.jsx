@@ -491,6 +491,8 @@ const SecretHitlerGame = () => {
       supabase.removeAllChannels();
     };
   }, []);
+
+  const isLeader = players.find(p => p.id === myPlayerId)?.is_leader;
   const connectedPlayers = players.filter(p => p.is_connected);
 
   return (
