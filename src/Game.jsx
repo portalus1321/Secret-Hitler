@@ -74,6 +74,8 @@ const SecretHitlerGame = () => {
   const [players, setPlayers] = useState([]);
   const [myPlayerId, setMyPlayerId] = useState(localStorage.getItem('myPlayerId') || null);
   const [error, setError] = useState('');
+  const [copied, setCopied] = useState(false);
+  const [showRole, setShowRole] = useState(false);
   const pollingRef = useRef(null);
 
   const myPlayer = players.find(p => p.id === myPlayerId);
@@ -393,7 +395,6 @@ const SecretHitlerGame = () => {
 
   // LOBBY SCREEN
   if (currentView === 'lobby' && currentRoom) {
-    const [copied, setCopied] = useState(false);
     const isLeader = myPlayer?.is_leader;
     const connected = players.filter(p => p.is_connected);
 
@@ -475,7 +476,6 @@ const SecretHitlerGame = () => {
 
   // ROLE REVEAL SCREEN
   if (currentView === 'role_reveal' && myPlayer?.role) {
-    const [showRole, setShowRole] = useState(false);
     const fascists = players.filter(p => p.party === 'fascist' && p.role !== ROLES.HITLER);
     const hitler = players.find(p => p.role === ROLES.HITLER);
 
