@@ -706,14 +706,14 @@ const SecretHitlerGame = () => {
           table: 'rooms', 
           filter: `id=eq.${roomId}` 
         },
-        (payload) => {
+        async (payload) => {
+          console.log('Room updated:', payload.new);
           setCurrentRoom(payload.new);
           
-          // Handle game start
+          // Handle game start - load players first to get roles
           if (payload.new.status === 'playing' && payload.new.game_state?.phase === GAME_PHASES.ROLE_REVEAL) {
-            loadPlayers(roomId).then(() => {
-              setCurrentView('role_reveal');
-            });
+            await loadPlayers(roomId);
+            setCurrentView('role_reveal');
           }
         }
       )
@@ -724,7 +724,12 @@ const SecretHitlerGame = () => {
     // Polling fallback
     const pollingInterval = setInterval(() => {
       loadPlayers(roomId);
-      loadRoom(roomId);
+      loadRoom(roomId).then(room => {
+        // Check if game started
+        if (room && room.status === 'playing' && room.game_state?.phase === GAME_PHASES.ROLE_REVEAL && currentView === 'lobby') {
+          setCurrentView('role_reveal');
+        }
+      });
     }, 2000);
 
     return () => {
@@ -744,7 +749,9 @@ const SecretHitlerGame = () => {
 
     if (!error && data) {
       setCurrentRoom(data);
+      return data;
     }
+    return null;
   };
 
   // Load players
@@ -912,6 +919,19 @@ const SecretHitlerGame = () => {
       supabase.removeAllChannels();
     };
   }, []);
+
+  // Monitor room status for view changes
+  useEffect(() => {
+    if (!currentRoom) return;
+    
+    // If game started, switch to role reveal
+    if (currentRoom.status === 'playing' && 
+        currentRoom.game_state?.phase === GAME_PHASES.ROLE_REVEAL && 
+        currentView === 'lobby' && 
+        myRole) {
+      setCurrentView('role_reveal');
+    }
+  }, [currentRoom, myRole, currentView]);
 
   return (
     <>
