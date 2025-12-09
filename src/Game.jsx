@@ -713,8 +713,9 @@ const SecretHitlerGame = () => {
           table: 'players', 
           filter: `room_id=eq.${roomId}` 
         },
-        () => {
-          console.log('Player change detected');
+        (payload) => {
+          console.log('Player change detected:', payload);
+          console.log('Calling loadPlayers...');
           loadPlayers(roomId);
         }
       )
@@ -722,6 +723,7 @@ const SecretHitlerGame = () => {
         console.log('Players subscription status:', status);
         if (status === 'SUBSCRIBED') {
           setIsSubscribed(true);
+          console.log('Successfully subscribed to players channel');
         }
       });
 
@@ -741,15 +743,24 @@ const SecretHitlerGame = () => {
           
           // Handle game start
           if (payload.new.status === 'playing' && 
-              payload.new.game_state?.phase === GAME_PHASES.ROLE_REVEAL &&
-              currentView === 'lobby') {
+              payload.new.game_state?.phase === GAME_PHASES.ROLE_REVEAL) {
+            console.log('Game started! Loading players to get roles...');
             await loadPlayers(roomId);
-            setTimeout(() => setCurrentView('role_reveal'), 100);
+            console.log('Players loaded, checking if should switch view...');
+            
+            // Give a small delay to ensure state updates
+            setTimeout(() => {
+              console.log('Attempting to switch to role reveal');
+              setCurrentView('role_reveal');
+            }, 500);
           }
         }
       )
       .subscribe((status) => {
         console.log('Room subscription status:', status);
+        if (status === 'SUBSCRIBED') {
+          console.log('Successfully subscribed to room channel');
+        }
       });
 
     subscriptionsRef.current = [playersChannel, roomChannel];
@@ -808,13 +819,24 @@ const SecretHitlerGame = () => {
       }
 
       if (data) {
+        console.log('Loaded players:', data);
         setPlayers(data);
         
         // Update my role if it exists
         const me = data.find(p => p.id === myPlayerId);
-        if (me && me.role) {
-          setMyRole(me.role);
-          setMyParty(me.party);
+        if (me) {
+          console.log('My player data:', me);
+          if (me.role) {
+            console.log('Setting my role:', me.role, me.party);
+            setMyRole(me.role);
+            setMyParty(me.party);
+            
+            // If I have a role and room is playing, switch to role reveal
+            if (currentRoom?.status === 'playing' && currentView === 'lobby') {
+              console.log('Switching to role reveal');
+              setCurrentView('role_reveal');
+            }
+          }
         }
       }
     } catch (err) {
@@ -832,6 +854,8 @@ const SecretHitlerGame = () => {
     }
 
     try {
+      console.log('Starting game with players:', connectedPlayers);
+      
       const distribution = getRoleDistribution(connectedPlayers.length);
       const roles = [
         ...Array(distribution.liberal).fill(ROLES.LIBERAL),
@@ -841,20 +865,25 @@ const SecretHitlerGame = () => {
       
       const shuffledRoles = roles.sort(() => Math.random() - 0.5);
       
-      for (let i = 0; i < connectedPlayers.length; i++) {
+      console.log('Assigning roles:', shuffledRoles);
+      
+      // Assign roles to all players
+      const updatePromises = connectedPlayers.map(async (player, i) => {
         const role = shuffledRoles[i];
         const party = role === ROLES.LIBERAL ? 'liberal' : 'fascist';
         
-        await supabase
+        console.log(`Assigning ${role} to ${player.name}`);
+        
+        return await supabase
           .from('players')
           .update({ role, party })
-          .eq('id', connectedPlayers[i].id);
+          .eq('id', player.id);
+      });
 
-        if (connectedPlayers[i].id === myPlayerId) {
-          setMyRole(role);
-          setMyParty(party);
-        }
-      }
+      // Wait for all role assignments to complete
+      await Promise.all(updatePromises);
+      
+      console.log('All roles assigned');
 
       const deck = [
         ...Array(6).fill('liberal'),
@@ -876,6 +905,7 @@ const SecretHitlerGame = () => {
         investigatedPlayers: []
       };
 
+      // Update room status
       await supabase
         .from('rooms')
         .update({ 
@@ -884,8 +914,16 @@ const SecretHitlerGame = () => {
         })
         .eq('id', currentRoom.id);
 
+      console.log('Room updated to playing status');
+
+      // Load my role
+      await loadPlayers(currentRoom.id);
+      
+      // Switch to role reveal
       setCurrentView('role_reveal');
+      
     } catch (err) {
+      console.error('Failed to start game:', err);
       setError('Failed to start game: ' + err.message);
     }
   };
